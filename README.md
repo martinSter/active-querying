@@ -1,8 +1,8 @@
 # Active Querying Approach to Epidemic Source Detection on Contact Networks
 
-Our implementation is heavily based on fast C code for static networks originally written by Petter Holme (thanks!). The code can be found here: https://github.com/pholme/sir.
+Our implementation is heavily based on fast C code for static networks originally written by Petter Holme (thanks!). His code can be found here: https://github.com/pholme/sir.
 
-The code can be compiled and run as follows:
+Our code can be compiled and run as follows:
 1. Create a directory *o* for the object files and a directory *output* for the output files.
 2. Type `make` to compile with gcc.
 3. Then run the code with `./run data/er_n100.csv 0.67 5634706295969658060`.
@@ -13,7 +13,7 @@ In the header file run.h you can change the following parameters:
 
 * Minimal outbreak size that is required for the experiments (`MINOUTBREAK`).
 * End of the epidemic (`TEND`).
-* Number of time steps to be considered. Together with `TEND` this determines how many times you run the inference/querying (`TSTEPS`).
+* Number of time steps to be considered (`TSTEPS`). Together with `TEND` this determines how many times you run the inference/querying.
 * Number of Monte-Carlo simulations (`NSIM`).
 * Number of experiments (`NEXP`).
 * Number of queries (`NQUERIES`).
