@@ -18,9 +18,4 @@ In the header file run.h you can change the following parameters:
 * Number of experiments (`NEXP`).
 * Number of queries (`NQUERIES`).
 
-The example network provided in the directory *data* is an Erdös-Rényi network ($$N=100$$ and $$p=0.05$$). It looks as follows:
-<object data="https://github.com/martinSter/active-querying/blob/main/data/Graph.pdf" type="application/pdf" width="700px" height="700px">
-    <embed src="https://github.com/martinSter/active-querying/blob/main/data/Graph.pdf">
-        <p>This browser does not support PDFs. Please download the PDF to view it: <a href="https://github.com/martinSter/active-querying/blob/main/data/Graph.pdf">Download PDF</a>.</p>
-    </embed>
-</object>
+The example network provided in the directory *data* is an Erdös-Rényi network ($N=100$ and $p=0.05$).
