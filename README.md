@@ -19,4 +19,4 @@ In the header file run.h you can change the following parameters:
 * Number of queries (`NQUERIES`).
 
 The example network provided in the directory *data* is an Erdös-Rényi network ($$N=100$$ and $$p=0.05$$). It looks as follows:
-![alt text](https://github.com/martinSter/active-querying/blob/main/data/Graph.pdf?raw=true)
+![Graph image](https://github.com/martinSter/active-querying/blob/main/data/Graph.pdf?)
