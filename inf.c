@@ -10,159 +10,162 @@ extern NODE *n;
 extern MCS *p;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// function to perform full inference (on all node states)
+// function to perform log-sum-exp trick
 
-void full_inference (unsigned int nexp, POSTERIOR *post, OUTPUT *o) {
+void log_sum_exp (INF *inf, PRIOR *pr, EVID *evid) {
     
     // declare integers
-    unsigned int j, h, k, active, status;
+    unsigned int i, j, h, status;
     
-    // declare double
-    double prob;
+    // declare doubles
+    double prob, max, lognorm = 0;
     
-    // loop over inference times
-    for (j = 0; j < g.ntinf; j++) {
-        
-        // allocate memory        
-        post->log_liks = calloc(g.n, sizeof(double));
-        
-        // initialize active to 0
-        active = 0;
-        
-        // count number of activated nodes at inference time just
-        for (h = 0; h < g.n; h++) if (n[h].ground_truth[j] > 0) active++;
-        
-        // print info to console
-        printf("Activated nodes at time %3.2f: %d\n", g.tinf[j], active);
+    // -----------------------------------------------------------------------------------------
+    // FIRST LOOP OVER LOG_LIKS
+    // compute log prior + log likelihood
     
-        // loop over sources
-        for (k = 0; k < g.n; k++) {
+    // loop over sources
+    for (i = 0; i < inf->n_sources; i++) {
+        
+        // loop over possible T's
+        for (j = 0; j < pr->n_durs; j++) {
             
-            // loop over all nodes
-            for (h = 0; h < g.n; h++) {
-                
+            // initialize log_liks as log of prior probability (or INVALID if prior is 0.0)
+            inf->log_liks[i][j] = (pr->priors[j] > 0.0) ? log(pr->priors[j]) : INVALID;
+            
+            // loop over nodes in evidence
+            for (h = 0; h < evid->n_evid; h++) {
+
                 // if log-likelihood takes on the value INVALID, break the loop over nodes
-                // in that case, the current source k is no longer a possible source
-                if (post->log_liks[k] == INVALID) break;
+                // in that case, the current (source, T) pair is no longer possible
+                if (inf->log_liks[i][j] == INVALID) break;
                 
-                // get status of node h at inference time j
-                status = n[h].ground_truth[j];
+                // get status of node h
+                status = n[evid->nodes[h]].true_state;
                 
                 // get node probability depending on status of node
-                if (status == 0) prob = 1 - p[k].inf[h][j] - p[k].rec[h][j];
-                else if (status == 1) prob = p[k].inf[h][j];
-                else prob = p[k].rec[h][j];
+                if (status == 0) prob = 1 - p[i].inf[evid->nodes[h]][j] - p[i].rec[evid->nodes[h]][j];
+                else if (status == 1) prob = p[i].inf[evid->nodes[h]][j];
+                else prob = p[i].rec[evid->nodes[h]][j];
                 
                 // if prob. is larger than 0.0, we add its log, otherwise we set it to INVALID
-                if (prob > 0.0) post->log_liks[k] += log(prob);
-                else post->log_liks[k] = INVALID;
+                if (prob > 0.0) inf->log_liks[i][j] += log(prob);
+                else inf->log_liks[i][j] = INVALID;
                 
             }
             
         }
-            
-        // compute rank of true source
-        sort_rank(post);
-        
-        // print result to console
-        // printf("Rank of true source: %d (%d)\n", (int) g.rank, g.nsources);
-        
-        // store results in out_full
-        o->qmap[nexp][j] = g.qmap;
-        o->ranks[nexp][j] = g.rank;
-        o->nsources[nexp][j] = g.nsources;
-        o->nactive[nexp][j] = active;
-        
-        // randomly select a node from all activated nodes
-        o->qrand[nexp][j] = random_draw(j);
-        
-        // free memory
-        free(post->log_liks);
         
     }
     
-}
-
-
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// function to compute likelihood based on evidence
-
-void likelihood (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
+    // -----------------------------------------------------------------------------------------
+    // SECOND LOOP OVER LOG_LIKS
+    // find the maximum in log_liks and count possible (source, T) pairs
     
-    // declare integers
-    unsigned int i, q, status;
-    
-    // declare double
-    double prob;
+    // initialize max to -DBL_MAX and set h back to 0
+    // we use h to count number of possible (source, T) pairs
+    max = -DBL_MAX; h = 0;
     
     // loop over sources
-    for (i = 0; i < g.n; i++) {
+    for (i = 0; i < inf->n_sources; i++) {
         
-        // if log-likelihood takes on the value INVALID, break the loop over nodes
-        // in that case, the current source k is no longer a possible source
-        if (post->log_liks[i] == INVALID) continue;
-        
-        // get queried node (last node in evid)
-        q = evid->nodes[evid->n_evid - 1];
-        
-        // get status of queried node (at inference time at index tinf_idx)
-        status = n[q].ground_truth[tinf_idx];
-        
-        // get node probability depending on status of node
-        if (status == 0) prob = 1 - p[i].inf[q][tinf_idx] - p[i].rec[q][tinf_idx];
-        else if (status == 1) prob = p[i].inf[q][tinf_idx];
-        else prob = p[i].rec[q][tinf_idx];
-        
-        // if prob. is larger than 0.0, we add its log, otherwise we set it to INVALID
-        if (prob > 0.0) post->log_liks[i] += log(prob);
-        else post->log_liks[i] = INVALID;
-        
-    }
-    
-}
-
-
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// function to compute posterior
-
-void posterior (POSTERIOR *post) {
-    
-    // declare integers
-    unsigned int i;
-    
-    // declare doubles
-    double thres, temp, norm = 0.0;
-    
-    // compute threshold
-    thres = log(PREC) - log(g.nsources);
-    
-    // loop over sources
-    for (i = 0; i < g.n; i++) {
-        
-        // we only need to manipulate log-likelihoods that are not INVALID
-        // this is ok since posterior array is initialized with 0s (calloc)
-        if (post->log_liks[i] != INVALID) {
+        // loop over possible T's
+        for (j = 0; j < pr->n_durs; j++) {
             
-            // subtract max. log-likelihood from each log value
-            temp = post->log_liks[i] - g.maxlog;
+            // jump to next iteration if INVALID
+            if (inf->log_liks[i][j] == INVALID) continue;
+            
+            // find max. element in log_liks (true max. cannot be larger than 0.0)
+            if (inf->log_liks[i][j] > max) max = inf->log_liks[i][j];
         
-            // exponentiate if temp is larger or equal to thres, otherwise set to 0.0
-            post->posterior[i] = (temp >= thres) ? exp(temp) : 0.0;
-        
+            // increase h by 1 to count an additional possible (source, T) pair
+            h++;
+            
         }
         
     }
     
-    // sum up all likelihoods
-    for (i = 0; i < g.n; i++) norm += post->posterior[i];
+    // -----------------------------------------------------------------------------------------
+    // THIRD LOOP OVER LOG_LIKS
+    // compute the log-normalization term
     
-    // normalize in order to get posterior probabilities
-    for (i = 0; i < g.n; i++) post->posterior[i] = post->posterior[i] / norm;
+    // loop over sources
+    for (i = 0; i < inf->n_sources; i++) {
+        
+        // loop over possible T's
+        for (j = 0; j < pr->n_durs; j++) {
+            
+            // jump to next iteration if INVALID
+            if (inf->log_liks[i][j] == INVALID) continue;
+            
+            // sum up e^(b_st - B) over all sources and T's
+            lognorm += exp(inf->log_liks[i][j] - max);
+            
+        }
+        
+    }
     
-    // print posterior of true source to console
-    // printf("Posterior of true source: %f\n", post->posterior[g.true_source]);
+    // part of log-sum-exp trick
+    lognorm = log(lognorm) + max;
+    
+    // -----------------------------------------------------------------------------------------
+    // FOURTH LOOP OVER LOG_LIKS
+    // compute posterior probabilities
+    
+    // loop over sources
+    for (i = 0; i < inf->n_sources; i++) {
+        
+        // loop over possible T's
+        for (j = 0; j < pr->n_durs; j++) {
+            
+            // if log_liks are INVALID...
+            if (inf->log_liks[i][j] == INVALID) {
+                
+                // then set posterior probability to 0.0
+                inf->log_liks[i][j] = 0.0;
+
+            } else {
+                
+                // else, compute the rest of log-sum-exp trick to get posterior probability
+                inf->log_liks[i][j] = exp(inf->log_liks[i][j] - lognorm);
+                
+            }
+            
+        }
+        
+    }
+    
+}
+
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// function to marginalize posterior distribution
+
+void marginalize (INF *inf, PRIOR *pr) {
+    
+    // declare integers
+    unsigned int i, j;
+    
+    // allocate memory to arrays for marginal posterior probabilities
+    inf->marginal_sources = calloc(inf->n_sources, sizeof(double));
+    inf->marginal_T = calloc(pr->n_durs, sizeof(double));
+    
+    // loop over sources
+    for (i = 0; i < inf->n_sources; i++) {
+        
+        // loop over possible T's
+        for (j = 0; j < pr->n_durs; j++) {
+            
+            // add up posterior probabilities over T's
+            inf->marginal_sources[i] += inf->log_liks[i][j];
+            
+            // add up posterior probabilities over sources
+            inf->marginal_T[j] += inf->log_liks[i][j];
+            
+        }
+        
+    }
     
 }
 
@@ -171,37 +174,41 @@ void posterior (POSTERIOR *post) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // function to compute weighted node predictions
 
-void weighted_node_predictions (unsigned int tinf_idx, POSTERIOR *post) {
+void weighted_node_predictions (INF *inf, PRIOR *pr) {
     
     // declare integers
-    unsigned int i, j;
+    unsigned int i, j, h;
     
     // initialize all weighted predictions to 0.0
-    for (i = 0; i < g.n; i++) {
-        n[i].weighted_pred.s = 0.0;
-        n[i].weighted_pred.i = 0.0;
-        n[i].weighted_pred.r = 0.0;
+    for (h = 0; h < g.n; h++) {
+        
+        n[h].weighted_pred.s = 0.0;
+        n[h].weighted_pred.i = 0.0;
+        n[h].weighted_pred.r = 0.0;
+    
     }
     
     // loop over all nodes in graph
-    for (i = 0; i < g.n; i++) {
-        
-        // loop over all node predictions (number of sources)
-        // multiply node prediction of source with posterior of this source
+    for (h = 0; h < g.n; h++) {
         
         // loop over sources
-        for (j = 0; j < g.n; j++) {
-            
-            // jump to next source if posterior is 0.0
-            if (post->posterior[j] == 0.0) continue;
-            
-            // add up individual predictions and weight with posterior
-            n[i].weighted_pred.s += ((1 - p[j].inf[i][tinf_idx] - p[j].rec[i][tinf_idx]) * post->posterior[j]);
-            n[i].weighted_pred.i += (p[j].inf[i][tinf_idx] * post->posterior[j]);
-            n[i].weighted_pred.r += (p[j].rec[i][tinf_idx] * post->posterior[j]);
+        for (i = 0; i < inf->n_sources; i++) {
+        
+            // loop over possible T's
+            for (j = 0; j < pr->n_durs; j++) {
+                
+                // jump to next (source, T) pair if posterior is 0.0
+                if (inf->log_liks[i][j] == 0.0) continue;
+                
+                // add up individual predictions using posterior as weight
+                n[h].weighted_pred.s += ((1 - p[i].inf[h][j] - p[i].rec[h][j]) * inf->log_liks[i][j]);
+                n[h].weighted_pred.i += (p[i].inf[h][j] * inf->log_liks[i][j]);
+                n[h].weighted_pred.r += (p[i].rec[h][j] * inf->log_liks[i][j]);
+                
+            }
             
         }
-       
+        
     }
     
 }
@@ -209,19 +216,79 @@ void weighted_node_predictions (unsigned int tinf_idx, POSTERIOR *post) {
 
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// function to run inference (at some inference time) and to call querying for one strategy
+// function to perform full inference (on all node states)
 
-void infer_query (unsigned int nexp, unsigned int tinf_idx, POSTERIOR *post, unsigned int (*fn)(unsigned int tinf_idx, POSTERIOR *post, EVID *evid), OUTPUTQ *o) {
+void full_inference (unsigned int nexp, INF *inf, PRIOR *pr, OUTF *outf) {
     
-    // declare integers
-    unsigned int i, next_node, trigger = 1;
+    // declare integer
+    unsigned int i;
     
     // declare evidence struct
     EVID evid;
     
-    // allocate memory        
-    post->log_liks = calloc(g.n, sizeof(double));
-    post->posterior = calloc(g.n, sizeof(double));
+    // set number of nodes in evidence to g.n (remember that we observe all nodes here)
+    evid.n_evid = g.n;
+    
+    // allocate memory to evid.nodes
+    evid.nodes = calloc(evid.n_evid, sizeof(unsigned int));
+    
+    // add nodes to evid.nodes (here simply all nodes in g.n)
+    for (i = 0; i < evid.n_evid; i++) evid.nodes[i] = i;
+    
+    // allocate memory to log_liks array of arrays (outer array)
+    inf->log_liks = malloc(inf->n_sources * sizeof(double *));
+    
+    // allocate memory to inner arrays
+    for (i = 0; i < inf->n_sources; i++) inf->log_liks[i] = calloc(pr->n_durs, sizeof(double));
+
+    // run log-sum-exp trick to compute posterior distribution over (source, T) pairs
+    log_sum_exp(inf, pr, &evid);
+    
+    // print (final) posterior to file
+    // export_posterior(nexp, g.n, inf, pr);
+    
+    // compute marginal posterior distributions
+    marginalize(inf, pr);
+    
+    // run eval_full() to compute all evaluation measures and store them in outf
+    eval_full(nexp, inf, outf);
+    
+    // store number of affected nodes and true source in outf
+    outf->nactives[nexp] = g.ns_gt;
+    outf->true_sources[nexp] = g.true_source;
+    
+    // free memory of inner arrays
+    for (i = 0; i < inf->n_sources; i++) free(inf->log_liks[i]);
+    
+    // free memory of outer array, marginal posterior arrays, and nodes array in evid
+    free(inf->log_liks); free(inf->marginal_sources); free(inf->marginal_T); free(evid.nodes);
+    
+}
+
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// function to run inference and to call querying for one strategy
+
+void infer_query (unsigned int nexp, INF *inf, PRIOR *pr, unsigned int (*fn)(INF *inf, PRIOR *pr, EVID *evid), OUTQ *o, OUTT *ot, unsigned int print) {
+    
+    // declare integers
+    unsigned int i, next_node;
+    
+    // declare start and end for storing CPU run times
+    clock_t t0, t1;
+    
+    // record start time t0
+    t0 = clock();
+    
+    // allocate memory to log_liks array of arrays (outer array)
+    inf->log_liks = malloc(inf->n_sources * sizeof(double *));
+    
+    // allocate memory to inner arrays
+    for (i = 0; i < inf->n_sources; i++) inf->log_liks[i] = calloc(pr->n_durs, sizeof(double));
+    
+    // declare evidence struct
+    EVID evid;
     
     // initialize evidence with first observed node
     initialize_evidence(&evid);
@@ -229,73 +296,41 @@ void infer_query (unsigned int nexp, unsigned int tinf_idx, POSTERIOR *post, uns
     // loop over NQUERIES
     for (i = 0; i < NQUERIES; i++) {
         
-        // compute log-likelihood (only if trigger is set to 1)
-        // this is important since likelihood should not be updated if no node is queried
-        if (trigger == 1) likelihood(tinf_idx, post, &evid);
+        // run log-sum-exp trick to compute posterior distribution over (source, T) pairs (based on current evidence)
+        log_sum_exp(inf, pr, &evid);
         
-        // compute rank of true source
-        sort_rank(post);
+        // print posterior to file if PRINT == 1 (set in run.h)
+        if (print == 1) export_posterior(nexp, i, inf, pr);
         
-        // print result to console
-        // printf("Rank of true source: %d (%d)\n", (int) g.rank, g.nsources);
-        
-        // store rank of true source
-        o->qmap[nexp][tinf_idx][i] = g.qmap;
-        o->ranks[nexp][tinf_idx][i] = g.rank;
-        o->nsources[nexp][tinf_idx][i] = g.nsources;
-        
-        // compute posterior
-        posterior(post);
+        // compute marginal posterior distributions
+        marginalize(inf, pr);
         
         // compute weighted node predictions
-        weighted_node_predictions(tinf_idx, post);
+        weighted_node_predictions(inf, pr);
+    
+        // run eval_query() to compute all evaluation measures and store them in o
+        eval_query(nexp, i, inf, o);
         
         // query next node
-        next_node = fn(tinf_idx, post, &evid);
+        next_node = fn(inf, pr, &evid);
         
-        // check if queried node is not NONE
-        if (next_node != NONE) {
-            // update evidence with new node
-            update_evidence(next_node, &evid);
-            // set trigger to 1 if evidence is updated
-            trigger = 1;
-        }
-        // else, set trigger to 0 (since we don't need to update likelihood)
-        else trigger = 0;
-        
-    }    
-    
-    // free memory
-    free(post->log_liks); free(post->posterior); free(evid.nodes);
-    
-}
-
-
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// function to perform querying-inference iteration
-
-void run_querying (unsigned int nexp, POSTERIOR *post, OUTPUTQ *o1, OUTPUTQ *o2, OUTPUTQ *o3, OUTPUTQ *o4, OUTPUTQ *o5) {
-    
-    // declare integers
-    unsigned int i;
-    
-    // loop over inference times
-    for (i = 0; i < g.ntinf; i++) {
-        
-        // draw first observed node
-        draw_first_node(i);
-        
-        // run inference with different querying strategies
-        // as many calls to function as there are querying strategies
-        infer_query(nexp, i, post, maxp, o1);
-        infer_query(nexp, i, post, ucty, o2);
-        infer_query(nexp, i, post, akld, o3);
-        infer_query(nexp, i, post, onehop, o4);
-        infer_query(nexp, i, post, randq, o5);
+        // add queried node to evidence if queried node is not NONE
+        if (next_node != NONE) update_evidence(next_node, &evid);
         
     }
-
+    
+    // free memory of inner arrays
+    for (i = 0; i < inf->n_sources; i++) free(inf->log_liks[i]);
+    
+    // free memory of outer array and marginal posterior arrays
+    free(inf->log_liks); free(inf->marginal_sources); free(inf->marginal_T); free(evid.nodes);
+    
+    // record end time t1
+    t1 = clock();
+    
+    // store CPU run time
+    ot->run_time[nexp] = ((double)(t1 - t0)) / CLOCKS_PER_SEC;
+    
 }
 
 

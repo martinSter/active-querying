@@ -10,65 +10,91 @@ extern NODE *n;
 extern MCS *p;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// this routine does the bookkeeping for an infection event
+// this routine first localizes the first contact later than 'now' in t
+// then picks the contact that can infect (a chain of bernouilli trials)
+// among the rest of the contacts. It returns the time of the infecting contact
+
+unsigned int contagious_contact (unsigned int *t, unsigned int nt, unsigned int now) {
+	
+    // declare unsigned integers
+    unsigned int lo = 0, mid, hi = nt - 1;
+
+    // no need to search further bcoz t is sorted. Note that the bisection search depends on this line.
+	if (t[hi] <= now) return END;
+
+	// the actual bisection search
+	while (lo < hi) {
+		mid = (lo + hi) >> 1;
+		if (t[mid] > now) hi = mid;
+		else lo = mid + 1;
+	}
+
+	// get a random contact
+	hi += g.rnd2inx[pcg_16()];
+
+    // if the contact is too late, skip it
+	if (hi >= nt) return NONE;
+
+	// return the time of the contact
+	return t[hi];
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// this routine does the book keeping for an infection event
 
 void infect () {
     
     // declare unsigned integers
-	unsigned int i, you, me = g.heap[1];
+	unsigned int i, you, t, me = g.heap[1];
     
-    // declare floats
-	float t, now = n[me].time;
+    // set now to infection time of me and sample time until recovery
+	unsigned int now = n[me].time, duration = exptime();
+    
+    // store infection and recovery time of me
+    n[me].inf_time = n[me].time;
+    n[me].rec_time = n[me].time + duration;
 
     // take the newly infected off the heap
 	del_root();
-    
-    // store infection time of me
-    n[me].inf_time = n[me].time;
-    
-	// get the recovery time of me
-    // multiply by g.beta to get the recovery time (which is 1 by default)
-	n[me].time += g.rexp[pcg_16()] * g.beta;
-    
-    // store recovery time of me
-    n[me].rec_time = n[me].time;
 
-	// go through the neighbors of the infected node
-	for (i = 0; i < n[me].deg; i++) {
+    // if the duration is zero, no one else can be infected
+	if (duration > 0) {
         
-        // get neighbor at index i
-		you = n[me].nb[i];
-        
-        // if you is S, you can be infected
-		if (S(you)) {
-        
-            // get the infection time of you
-			t = now + g.rexp[pcg_16()];
-            
-            // make sure that t is before recovery time of me and...
-            // t is before current infection time of you and...
-            // t is smaller or equal to TEND
-			if ((t < n[me].time) && (t < n[you].time) && (t <= TEND)) {
-                
-                // if that is satisfied, set time of you to t
-				n[you].time = t;
-                
-                // store who you gets infected by
-                n[you].inf_by = me;
-                
-                // if not listed before, then extend the heap
-				if (n[you].heap == NONE) {
-					g.heap[++g.nheap] = you;
-					n[you].heap = g.nheap;
+        // set time of me to time of recovery
+		n[me].time += duration;
+
+		// go through the neighbors of the infected node
+		for (i = 0; i < n[me].deg; i++) {
+            // set you to neighbor at index i
+			you = n[me].nb[i];
+            // if you is S, you can be infected
+			if (S(you)) {
+				// find the infection time of you
+				t = contagious_contact(n[me].t[i], n[me].nc[i], now);
+				// bcoz of the sorting of nbs, we can break
+                if (t == END) break;
+
+				// if the infection time is before when me gets recovered,
+				// and (if it was already listed for infection) before the
+				// previously listed infection event,
+                // and if the infection time is at the latest at t* + T, then list it
+				if ((t <= n[me].time) && (t < n[you].time) && (t <= (g.true_start + g.T))) {
+					// set you's infection time
+                    n[you].time = t;
+                    // store who you gets infected by
+                    n[you].inf_by = me;
+                    // if not listed before, then extend the heap
+					if (n[you].heap == NONE) {
+						g.heap[++g.nheap] = you;
+						n[you].heap = g.nheap;
+					}
+                    // this works bcoz the only heap relationship that can be violated is the one between you and its parent
+					up_heap(n[you].heap);
 				}
-                
-                // this works bcoz the only heap relationship that can be violated is the one between you and its parent
-				up_heap(n[you].heap);
-                
 			}
 		}
 	}
-    
+
     // add me to g.s
 	g.s[g.ns++] = me;
     
@@ -77,7 +103,7 @@ void infect () {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // this routine runs one SIR outbreak from a random starting node
 
-void sir (unsigned int source) {
+void sir (unsigned int source, unsigned int start) {
     
     // declare integers i
 	unsigned int i;
@@ -85,8 +111,8 @@ void sir (unsigned int source) {
     // initialize size of outbreak to 0
 	g.ns = 0;
 	
-	// infect the source at time 0
-	n[source].time = 0.0;
+	// infect the source at time start (0, ..., g.dur)
+	n[source].time = start;
 	
     // set source on position 1 of heap
     n[source].heap = 1;
@@ -98,215 +124,170 @@ void sir (unsigned int source) {
 	while (g.nheap) infect();
 
 	// clean
-	for (i = 0; i < g.ns; i++) {
-        n[g.s[i]].heap = NONE;
-        n[g.s[i]].time = DBL_MAX;
-    }
+	for (i = 0; i < g.ns; i++) n[g.s[i]].heap = n[g.s[i]].time = NONE;
     
 }
+
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // function to generate ground truth
 
 void ground_truth () {
     
-    // declare unsigned integers
-	unsigned int i, j;
+    // declare unsigned integer
+	unsigned int i, upper, lower;
     
-    // declare floats
-    float min, max, now;
+    // upper and lower limit of starting times
+    upper = g.dur - g.T; lower = (NUMT - 1) * g.T + 1;
     
-    // allocate memory to ground_truth
-    for (i = 0; i < g.n; i++) n[i].ground_truth = calloc(g.ntinf, sizeof(unsigned int));
+    // set all true_state values to 0 (= susceptible)
+    // true_state describes the disease status at g.dur
+    for (i = 0; i < g.n; i++) n[i].true_state = 0;
     
     // simulate until we get outbreak that has at least size of MINOUTBREAK
     do {
         
+        // sample starting time
+        g.true_start = (pcg_32() % (upper - lower + 1)) + lower;
+                
+        // sample true source index
+        g.true_source_idx = pcg_32_bounded(g.nps);
+        
         // store true source
-        g.true_source = pcg_32_bounded(g.n);
+        g.true_source = g.ps[g.true_source_idx];
         
         // run sir() process
-        sir(g.true_source);
+        sir(g.true_source, g.true_start);
         
-        // if outbreak size is smaller than MINOUTBREAK, set inf_time and rec_time back to DBL_MAX
-        if (g.ns < MINOUTBREAK) {
-            for (i = 0; i < g.ns; i++) {
-                n[g.s[i]].inf_time = n[g.s[i]].rec_time = DBL_MAX;
-                n[g.s[i]].inf_by = NONE;
-            }
-        }
+        // if outbreak size is smaller than MINOUTBREAK, set inf_time and rec_time back to NONE
+        if (g.ns < MINOUTBREAK) for (i = 0; i < g.ns; i++) n[g.s[i]].inf_time = n[g.s[i]].rec_time = n[g.s[i]].inf_by = NONE;
         
-	} while (g.ns < MINOUTBREAK);
+	} while (g.ns < MINOUTBREAK); 
     
     // print info to console
-    printf("True seed node is %d\n", g.true_source);
+    printf("True seed node is %d (getting infected at time %d)\n", g.true_source, g.true_start);
     printf("Number of infected or recovered nodes: %d\n", g.ns);
+    printf("First observation of outbreak occurrs at %d\n", g.true_start + g.T);
     
     // store ground truth   
     // loop over all activated nodes in g.s
     for (i = 0; i < g.ns; i++) {
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            // set min to infection time of node
-            min = n[g.s[i]].inf_time;
-            // set max to recovery time of node
-            max = n[g.s[i]].rec_time;
-            // set now to current inference time
-            now = g.tinf[j];
-            // if now is within infectious period of node, set state to 1 (infectious)
-            if ((now - min) * (now - max) < 0) n[g.s[i]].ground_truth[j] = 1;
-            // if now is larger or equal to max, set state to 2 (recovered)
-            if (now >= max) n[g.s[i]].ground_truth[j] = 2;
+        // if the recovery time is later than t* + T, the state is 1 (= infectious)
+        if (n[g.s[i]].rec_time > (g.true_start + g.T)) {
+            n[g.s[i]].true_state = 1;
+        } else {
+            // otherwise, it is 2 (= recovered)
+            n[g.s[i]].true_state = 2;
         }
+        printf("Node %d: Infected by %d at %d. Recovery time is %d, hence the true state is %d\n", g.s[i], n[g.s[i]].inf_by, n[g.s[i]].inf_time, n[g.s[i]].rec_time, n[g.s[i]].true_state);
     }
     
-    // store size of ground truth in GLOBALS
+    // store size of ground truth and time of inference in GLOBALS
     g.ns_gt = g.ns;
+    g.t_now = g.true_start + g.T;
     
-    // set inf_time and rec_time of nodes back to DBL_MAX
-    for (i = 0; i < g.ns; i++) {
-        n[g.s[i]].inf_time = n[g.s[i]].rec_time = DBL_MAX;
-        n[g.s[i]].inf_by = NONE;
-    }
+    // set inf_time and rec_time of nodes back to NONE
+    for (i = 0; i < g.ns; i++) n[g.s[i]].inf_time = n[g.s[i]].rec_time = n[g.s[i]].inf_by = NONE;
     
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// function to create simulation results for all possible sources
+// function to create simulation results for all possible start configurations
 
-void monte_carlo () {
+void simulate (unsigned int nexp, INF *inf, PRIOR *pr, OUTF *outf) {
     
     // declare unsigned integers
-    unsigned int i, j, k, h, os, r0;
+    unsigned int i, j, k, T, start;
     
-    // declare integers
-    float t, min, max, now;
+    // declare start and end for storing CPU run times
+    clock_t t0, t1;
     
-    // initialize g.os and g.r0
-    g.os = 0.0; g.r0 = 0.0;
+    // record start time t0
+    t0 = clock();
     
-    // ------------------------------------------------
-    // store inference times
+    // compute earliest possible start
+    start = g.t_now - pr->n_durs;
     
-    // set number of inference times
-    g.ntinf = (TEND - 0.0) / TSTEPS;
-    
-    // allocate memory
-    g.tinf = malloc(g.ntinf * sizeof(unsigned int));
-    
-    // set t to 0 (start of time period)
-    t = 0.0;
-    
-    // loop over inference times
-    for (i = 0; i < g.ntinf; i++) {
-        // compute current inference time
-        t += TSTEPS;
-        // store inference time in g.tinf
-        g.tinf[i] = t;
-    }
-    
-    // ------------------------------------------------
-    // allocate memory to p and all its subarrays
+    // find all possible sources with deterministic SIR
+    find_active_sources(inf, start);
     
     // allocate memory to array with MCS probabilities
-    p = calloc(g.n, sizeof(MCS));
-    
-    // loop over sources
-    for (i = 0; i < g.n; i++) {
-        // allocate memory to outer arrays
-        p[i].inf = malloc(g.n * sizeof(double *));
-        p[i].rec = malloc(g.n * sizeof(double *));
-        // loop over nodes in graph g.n
-        for (j = 0; j < g.n; j++) {
-            // allocate memory to inner arrays
-            p[i].inf[j] = calloc(g.ntinf, sizeof(double));
-            p[i].rec[j] = calloc(g.ntinf, sizeof(double));
-        }
-    }
+    p = calloc(inf->n_sources, sizeof(MCS));
     
     // ------------------------------------------------
     // run Monte-Carlo simulations and store results
     
-    // loop over sources
-    for (i = 0; i < g.n; i++) {
+    // 1. Loop over sources and memory allocation
+    for (i = 0; i < inf->n_sources; i++) {
         
-        // initialize os to 0
-        os = 0; r0 = 0;
+        // allocate memory to outer arrays
+        p[i].inf = malloc(g.n * sizeof(double *));
+        p[i].rec = malloc(g.n * sizeof(double *));
         
-        // simulate NSIM times
-        for (j = 0; j < NSIM; j++) {
+        // loop over nodes in graph g.n
+        for (j = 0; j < g.n; j++) {
             
-            // run SIR from source i
-            sir(i);
+            // allocate memory to inner arrays
+            // for each node we want to store the prob. of 
+            // being infected / recovered if the current source 
+            // started the infection at possible starting times
+            p[i].inf[j] = calloc(pr->n_durs, sizeof(double));
+            p[i].rec[j] = calloc(pr->n_durs, sizeof(double));
             
-            // store outbreak size
-            os += g.ns;
+        }
+        
+        // 2. Loop over possible values for T
+        for (T = 0; T < pr->n_durs; T++) {
             
-            // loop over all activated nodes in g.s
-            for (k = 0; k < g.ns; k++) {
+            // compute epidemic start
+            start = g.t_now - T;
+            
+            // 3. Simulate NSIM times
+            for (j = 0; j < NSIM; j++) {
                 
-                // if node was infected by source, then increment r0 by 1
-                if (n[g.s[k]].inf_by == i) r0++;
+                // run SIR from source at index i, starting at time t
+                sir(inf->sources[i], start);
                 
-                // loop over inference times
-                for (h = 0; h < g.ntinf; h++) {
+                // loop over all activated nodes in g.s
+                for (k = 0; k < g.ns; k++) {
                     
-                    // set min to infection time of node
-                    min = n[g.s[k]].inf_time;
-                    // set max to recovery time of node
-                    max = n[g.s[k]].rec_time;
-                    // set now to current inference time
-                    now = g.tinf[h];
-                    
-                    // if now is within infectious period of node, add 1.0 to infectious array
-                    if ((now - min) * (now - max) < 0) p[i].inf[g.s[k]][h] += 1.0;
-                    
-                    // if now is larger or equal to max, add 1.0 to recovered array
-                    if (now >= max) p[i].rec[g.s[k]][h] += 1.0;
+                    // store results for each activated node
+                    if (n[g.s[k]].rec_time > g.t_now) {
+                        // add 1.0 to inf. array if node's recovery time is later than g.dur
+                        p[i].inf[g.s[k]][T] += 1.0;
+                    } else {
+                        // add 1.0 to rec. array if node's recovery time is before g.dur
+                        p[i].rec[g.s[k]][T] += 1.0;
+                    }
+            
+                    // set inf_time and rec_time of nodes back to NONE
+                    n[g.s[k]].inf_time = n[g.s[k]].rec_time = n[g.s[k]].inf_by = NONE;
                     
                 }
-        
-                // set inf_time and rec_time of nodes back to DBL_MAX
-                n[g.s[k]].inf_time = n[g.s[k]].rec_time = DBL_MAX;
-                
-                // set inf_by back to NONE
-                n[g.s[k]].inf_by = NONE;
                 
             }
             
-        }
-        
-        // store average outbreak size of source i in g.os
-        g.os += ((double) os / NSIM);
-        g.r0 += ((double) r0 / NSIM);
-        
-    }
-    
-    // print average outbreak size and R0 to console
-    printf("Average outbreak size: %f\n", g.os / g.n);
-    printf("Average R0: %f\n", g.r0 / g.n);
-    
-    // ------------------------------------------------
-    // normalize in order to get probabilities
-    
-    // loop over sources
-    for (i = 0; i < g.n; i++) {
-        // loop over nodes in graph
-        for (j = 0; j < g.n; j++) {
-            // loop over inference times
-            for (k = 0; k < g.ntinf; k++) {
-                // add-one smoothing and normalization
-                p[i].inf[j][k] = (p[i].inf[j][k] + 1) / (NSIM + 1);
-                p[i].rec[j][k] = (p[i].rec[j][k] + 1) / (NSIM + 1);
+            // 4. Loop over nodes in graph and normalize in order to get probabilities
+            for (j = 0; j < g.n; j++) {
+            
                 // if element in array is larger than 0.0, normalize by NSIM
-                //if (p[i].inf[j][k] > 0.0) p[i].inf[j][k] /= (NSIM + 1);
-                //if (p[i].rec[j][k] > 0.0) p[i].rec[j][k] /= (NSIM + 1);
+                if (p[i].inf[j][T] > 0.0) p[i].inf[j][T] /= NSIM;
+                if (p[i].rec[j][T] > 0.0) p[i].rec[j][T] /= NSIM;
+            
             }
             
         }
-        
+  
     }
     
+    // record end time t1
+    t1 = clock();
+    
+    // store simulation run time
+    outf->sim_time[nexp] = ((double)(t1 - t0)) / CLOCKS_PER_SEC;
+ 
 }
+
+
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

@@ -35,7 +35,7 @@ unsigned int random_sampling (EVID *evid) {
         // randomly pick one
         max_node = possible_nodes[pcg_32_bounded(sum_pn)];
         // print message to console
-        // printf("Node %d randomly sampled\n", max_node);
+        printf("Node %d randomly sampled\n", max_node);
         // return node
         return max_node;
     }
@@ -52,19 +52,19 @@ unsigned int random_sampling (EVID *evid) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // MAXP
 
-unsigned int maxp (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
+unsigned int maxp (INF *inf, PRIOR *pr, EVID *evid) {
     
     // declare integers
     unsigned int i, ns = 0, max_node;
     
-    // avoid warning message
-    UNUSED(tinf_idx);
-    
     // create an array of doubles on stack
     double temp[g.n];
     
+    // avoid warning
+    UNUSED(pr);
+    
     // count number of still possible sources
-    for (i = 0; i < g.n; i++) if (post->log_liks[i] != INVALID) ns++;
+    for (i = 0; i < inf->n_sources; i++) if (inf->marginal_sources[i] != 0.0) ns++;
     
     // return NONE if there is only one possible source left
     if (ns == 1.0) {
@@ -92,7 +92,7 @@ unsigned int maxp (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
     }
     
     // print result to console
-    // printf("Node %d selected (probability: %.4f)\n", max_node, temp[max_node]);
+    printf("Node %d selected (probability: %.4f)\n", max_node, temp[max_node]);
     
     // return result
     return max_node;
@@ -104,7 +104,7 @@ unsigned int maxp (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // UCTY
 
-unsigned int ucty (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
+unsigned int ucty (INF *inf, PRIOR *pr, EVID *evid) {
     
     // declare integers
     unsigned int i, ns = 0, max_node;
@@ -112,14 +112,14 @@ unsigned int ucty (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
     // declare doubles
     double ves, vei, ver;
     
-    // avoid warning message
-    UNUSED(tinf_idx);
-    
     // create an array of doubles on stack
     double temp[g.n];
     
+    // avoid warning
+    UNUSED(pr);
+    
     // count number of still possible sources
-    for (i = 0; i < g.n; i++) if (post->log_liks[i] != INVALID) ns++;
+    for (i = 0; i < inf->n_sources; i++) if (inf->marginal_sources[i] != 0.0) ns++;
     
     // return NONE if there is only one possible source left
     if (ns == 1.0) {
@@ -157,7 +157,7 @@ unsigned int ucty (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
     }
     
     // print result to console
-    // printf("Node %d selected (vote entropy: %.4f)\n", max_node, temp[max_node]);
+    printf("Node %d selected (vote entropy: %.4f)\n", max_node, temp[max_node]);
     
     // return result
     return max_node;
@@ -169,19 +169,19 @@ unsigned int ucty (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // AKLD
 
-unsigned int akld (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
+unsigned int akld (INF *inf, PRIOR *pr, EVID *evid) {
     
     // declare integers
-    unsigned int i, j, ns = 0, max_node;
+    unsigned int i, j, h, ns = 0, max_node;
     
     // declare and initialize (long) doubles
-    double sus, inf, rec, temp1, temp2, temp3, probS, avg_div;
+    double susc, infe, reco, temp1, temp2, temp3, probS, avg_div;
     
     // create an array of doubles on stack
     double temp[g.n];
     
     // count number of still possible sources
-    for (i = 0; i < g.n; i++) if (post->log_liks[i] != INVALID) ns++;
+    for (i = 0; i < inf->n_sources; i++) if (inf->marginal_sources[i] != 0.0) ns++;
     
     // return NONE if there is only one possible source left
     if (ns == 1.0) {
@@ -192,38 +192,43 @@ unsigned int akld (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
     // ============================================================
     
     // loop over all nodes in graph
-    for (i = 0; i < g.n; i++) {
+    for (h = 0; h < g.n; h++) {
         
         // initialize avg_div to 0.0
         avg_div = 0.0;
         
         // compute logs of weighted predictions
-        temp1 = (n[i].weighted_pred.s > 0.0) ? log(n[i].weighted_pred.s) : 0.0;
-        temp2 = (n[i].weighted_pred.i > 0.0) ? log(n[i].weighted_pred.i) : 0.0;
-        temp3 = (n[i].weighted_pred.r > 0.0) ? log(n[i].weighted_pred.r) : 0.0;
+        temp1 = (n[h].weighted_pred.s > 0.0) ? log(n[h].weighted_pred.s) : 0.0;
+        temp2 = (n[h].weighted_pred.i > 0.0) ? log(n[h].weighted_pred.i) : 0.0;
+        temp3 = (n[h].weighted_pred.r > 0.0) ? log(n[h].weighted_pred.r) : 0.0;
         
-        // loop over sources (predictions)
-        for (j = 0; j < g.n; j++) {
+        // loop over sources
+        for (i = 0; i < inf->n_sources; i++) {
+        
+            // loop over possible T's
+            for (j = 0; j < pr->n_durs; j++) {
             
-            // initialize to 0.0
-            sus = 0.0; inf = 0.0; rec = 0.0;
+                // initialize to 0.0
+                susc = 0.0; infe = 0.0; reco = 0.0;
+                
+                // compute probability of being susceptible
+                probS = 1 - p[i].inf[h][j] - p[i].rec[h][j];
+                
+                // compute divergences for three possible outcomes (only if indiv. pred. larger than 0)
+                if (probS > 0.0) susc = probS * (log(probS) - temp1);
+                if (p[i].inf[h][j] > 0.0) infe = p[i].inf[h][j] * (log(p[i].inf[h][j]) - temp2);
+                if (p[i].rec[h][j] > 0.0) reco = p[i].rec[h][j] * (log(p[i].rec[h][j]) - temp3);
+                
+                // multiply with posterior
+                avg_div += ((susc + infe + reco) * inf->log_liks[i][j]);
+                //avg_div += (sus + inf + rec);
             
-            // compute probability of being susceptible
-            probS = 1 - p[j].inf[i][tinf_idx] - p[j].rec[i][tinf_idx];
-            
-            // compute divergences for three possible outcomes (only if indiv. pred. larger than 0)
-            if (probS > 0.0) sus = probS * (log(probS) - temp1);
-            if (p[j].inf[i][tinf_idx] > 0.0) inf = p[j].inf[i][tinf_idx] * (log(p[j].inf[i][tinf_idx]) - temp2);
-            if (p[j].rec[i][tinf_idx] > 0.0) rec = p[j].rec[i][tinf_idx] * (log(p[j].rec[i][tinf_idx]) - temp3);
-            
-            // multiply with posterior
-            avg_div += ((sus + inf + rec) * post->posterior[j]);
-            //avg_div += (sus + inf + rec);
+            }
             
         }
         
         // store avg. KL-divergence in temp
-        temp[i] = avg_div;
+        temp[h] = avg_div;
         
     }
     
@@ -242,7 +247,7 @@ unsigned int akld (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
     }
     
     // print result to console
-    // printf("Node %d selected (avg. KL-divergence: %.4f)\n", max_node, temp[max_node]);
+    printf("Node %d selected (avg. KL-divergence: %.4f)\n", max_node, temp[max_node]);
     
     // return result
     return max_node;
@@ -254,20 +259,19 @@ unsigned int akld (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // ONE-HOP
 
-unsigned int onehop (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
+unsigned int onehop (INF *inf, PRIOR *pr, EVID *evid) {
     
     // declare integers
-    unsigned int i, j, max_node, ns = 0, sum_pn = 0;
+    unsigned int i, j, k, max_node, ns = 0;
     
     // create arrays
-    unsigned int temp[g.n];
-    unsigned int possible_nodes[g.n];
+    double temp[g.n];
     
-    // initialize all values of temp to 0
-    memset(temp, 0, g.n * sizeof(unsigned int));
+    // initialize all values of temp to 0.0
+    memset(temp, 0.0, g.n * sizeof(double));
     
     // count number of still possible sources
-    for (i = 0; i < g.n; i++) if (post->log_liks[i] != INVALID) ns++;
+    for (i = 0; i < inf->n_sources; i++) if (inf->marginal_sources[i] != 0.0) ns++;
     
     // return NONE if there is only one possible source left
     if (ns == 1.0) {
@@ -278,39 +282,90 @@ unsigned int onehop (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
     // ============================================================
     
     // 1) loop over all nodes in evidence to find nodes that can be contacted by evidence nodes
+    // ==> Nodes that are contacted by evidence nodes before inference time.
     for (i = 0; i < evid->n_evid; i++) {
         
         // if node in evidence is infectious or recovered ...
-        if (n[evid->nodes[i]].ground_truth[tinf_idx] != 0) {
+        if (n[evid->nodes[i]].true_state != 0) {
             
-            // loop over node's neighbors and add 1 to temp at position of neighbors
-            for (j = 0; j < n[evid->nodes[i]].deg; j++) temp[n[evid->nodes[i]].nb[j]]++;
+            // loop over node's neighbors
+            for (j = 0; j < n[evid->nodes[i]].deg; j++) {
+                
+                // loop over contact times with neighbor j
+                for (k = 0; k < n[evid->nodes[i]].nc[j]; k++) {
+                    
+                    // if contact time is larger or equal to first possible starting time and smaller or equal to inference time...
+                    if (n[evid->nodes[i]].t[j][k] >= (g.t_now - pr->n_durs) && n[evid->nodes[i]].t[j][k] <= g.t_now) {
+                        
+                        // add 1 to temp at position of neighbors
+                        temp[n[evid->nodes[i]].nb[j]]++;
+                        
+                        // we can break the loop over contact times and go to next neighbor
+                        break;
+                        
+                    }
+                    
+                }
+                
+            }
+            
+        }
+        
+    }
+    
+    // 2) loop over all possible sources in order to find nodes that have a contact to one of the nodes in evidence
+    // note: it is enough to loop over possible sources since only these nodes have out-edges
+    // ==> Nodes that contact evidence nodes before inference time.
+    // This step is technically not necessary for undirected networks.
+    for (i = 0; i < g.nps; i++) {
+        
+        // loop over node's neighbors
+        for (j = 0; j < n[g.ps[i]].deg; j++) {
+            
+            // check if neighbor is in evidence
+            if (n[n[g.ps[i]].nb[j]].e == 1) {
+                
+                // loop over contact times with neighbor j
+                for (k = 0; k < n[g.ps[i]].nc[j]; k++) {
+                    
+                    // if contact time is larger or equal to first possible starting time and smaller or equal to inference time...
+                    if (n[g.ps[i]].t[j][k] >= (g.t_now - pr->n_durs) && n[g.ps[i]].t[j][k] <= g.t_now) {
+                        
+                        // add 1 to temp at position of neighbors
+                        temp[g.ps[i]]++;
+                        
+                        // we can break the loop over contact times and go to next neighbor
+                        break;
+                        
+                    }
+                    
+                }
+                
+            }
             
         }
         
     }
     
     // set nodes in evidence to zero
-    for (i = 0; i < evid->n_evid; i++) temp[evid->nodes[i]] = 0;
+    for (i = 0; i < evid->n_evid; i++) temp[evid->nodes[i]] = 0.0;
     
-    // select only nodes that are not zero
-    for (i = 0; i < g.n; i++) if (temp[i] > 0) possible_nodes[sum_pn++] = i;
+    // find node with max. number of contacts to activated nodes
+    max_node = find_max(temp);
     
-    // return node
-    if (sum_pn > 0) {
-        // randomly pick one
-        max_node = possible_nodes[pcg_32_bounded(sum_pn)];
-        // print message to console
-        // printf("Node %d selected\n", max_node);
-        // return node
-        return max_node;
-    }
-    else {
+    // if function returns NONE, we sample a node randomly
+    if (max_node == NONE) {
         // randomly sample node from all nodes that are not in evidence yet
         max_node = random_sampling(evid);
         // return result
         return max_node;
     }
+    
+    // print result to console
+    printf("Node %d selected (number of contacts: %.0f)\n", max_node, temp[max_node]);
+    
+    // return result
+    return max_node;
     
 }
 
@@ -319,7 +374,7 @@ unsigned int onehop (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // RANDOM
 
-unsigned int randq (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
+unsigned int randq (INF *inf, PRIOR *pr, EVID *evid) {
     
     // declare integers
     unsigned int i, j, max_node, ns = 0, sum_pn = 0;
@@ -332,7 +387,7 @@ unsigned int randq (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
     memset(temp, 0, g.n * sizeof(unsigned int));
     
     // count number of still possible sources
-    for (i = 0; i < g.n; i++) if (post->log_liks[i] != INVALID) ns++;
+    for (i = 0; i < inf->n_sources; i++) if (inf->marginal_sources[i] != 0.0) ns++;
     
     // return NONE if there is only one possible source left
     if (ns == 1.0) {
@@ -343,13 +398,13 @@ unsigned int randq (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
     // ============================================================
     
     // loop over all possible sources
-    for (i = 0; i < g.n; i++) {
+    for (i = 0; i < inf->n_sources; i++) {
         
         // jump to next source if current source is impossible
-        if (post->log_liks[i] == INVALID) continue;
+        if (inf->marginal_sources[i] == 0.0) continue;
         
         // loop over all nodes and increment temp by 1 if node has positive probability of being reached by possible source
-        for (j = 0; j < g.n; j++) if((p[i].inf[j][tinf_idx] + p[i].rec[j][tinf_idx]) > 0.0) temp[j]++;
+        for (j = 0; j < g.n; j++) if((p[i].inf[j][pr->n_durs - 1] + p[i].rec[j][pr->n_durs - 1]) > 0.0) temp[j]++;
         
     }
     
@@ -364,7 +419,7 @@ unsigned int randq (unsigned int tinf_idx, POSTERIOR *post, EVID *evid) {
         // randomly pick one
         max_node = possible_nodes[pcg_32_bounded(sum_pn)];
         // print message to console
-        // printf("Node %d selected\n", max_node);
+        printf("Node %d selected\n", max_node);
         // return node
         return max_node;
     }

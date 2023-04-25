@@ -24,95 +24,275 @@ extern EVID evid_kl;
 unsigned int *alloc;
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// reads the network, assumes an edge list with vertex label 0,N-1
-// if your network has nodes with degree zero, make sure that none of them is
-// the node with largest index
+// giving exponential random numbers with a mean reciprocal of the recovery rate
 
-void read_data (FILE *fp) {
+unsigned int exptime () {
+	uint32_t r = pcg_32();
+
+	if (r == 4294967295u) return 0;
+
+    // this basically implements the inverse probability transform for exponential distr.
+	return -1 * log((r + 1) / 4294967296.0) / g.mu;
+}
+
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// gets the index of you in me's adjacency list
+
+unsigned int get_index (unsigned int me, unsigned int you) {
+	
+    // define int i
+    unsigned int i;
+
+    // loop over neighbors of 'me' and find index i where neighbor is 'you'
+    // if we find neighbor, we return its index
+	for (i = 0; i < n[me].deg; i++) if (n[me].nb[i] == you) return i;
+
+	// what follows is procedure if neighbor is not yet in 'nb'
     
-    // declare unsigned integers
+    // note: alloc is initialized with all zeros
+    // note: we allocate more space than we need (double deg) so that we
+    // do not have to allocate more space in every step
+	if (alloc[me] <= n[me].deg) {
+		// get value of alloc at index 'me'
+        i = alloc[me];
+        // set the value at alloc[me] to double the degree if degree is positive or 
+        // to 1 otherwise (i.e. if deg == 0)
+		alloc[me] = (n[me].deg > 0) ? 2 * n[me].deg : 1;
+        // increase the allocated space to arrays with the value in alloc[me]
+		n[me].nb = realloc(n[me].nb, alloc[me] * sizeof(unsigned int));
+		n[me].nc = realloc(n[me].nc, alloc[me] * sizeof(unsigned int));
+        // since t is a pointer to a pointer, we use the size of a pointer to int
+        // effectively, t is an array of arrays containing the contact times with each neighbor
+		n[me].t = realloc(n[me].t, alloc[me] * sizeof(unsigned int *));
+		// for loop that does not start at 0 but at previous value of alloc[me], see above
+        for ( ; i < alloc[me]; i++) {
+            // initialize new positions in nc and nb to 0
+			n[me].nc[i] = n[me].nb[i] = 0;
+            // initialize new arrays in t to NULL
+			n[me].t[i] = NULL;
+		}
+	}
+
+    // add 'you' to 'nb' and increase 'deg' by one
+	n[me].nb[n[me].deg++] = you;
+
+    // return index of new neighbor
+	return n[me].deg - 1;
+}
+
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// reads the network, assumes a contact list with vertex label 0, N-1,
+// ordered in time. If your network has nodes with zero contacts, make sure
+// that none of them is the node with largest index.
+// This assumes directed networks where the first node is always the orignating
+// node and the second node is the receiving node.
+
+void read_data (FILE *fp, unsigned int dir) {
+    
+    // declare integers
 	unsigned int i, me, you;
     
-    // initialize number of nodes
-	g.n = 0; g.e = 0;
+    // assert that input 'dir' is one of the possible values
+    // undirected: dir = 0, directed: dir = 1
+    assert(dir == 0 || dir == 1);
 
-	// scan the system size to find g.n
-	while (2 == fscanf(fp, "%u %u\n", &me, &you)) {
-		if (g.n < me) g.n = me;
+    // initialize number of nodes and edges in g to 0
+	g.n = 0;
+    g.e = 0;
+
+	// scan the system size
+    // loop over lines in fp
+    // that is why the node with largest integer should have contacts,
+    // if it does not, then the system size will not be collected correctly
+	while (2 == fscanf(fp, "%u %u %*u\n", &me, &you)) {
+		// set g.n always to largest value
+        if (g.n < me) g.n = me;
 		if (g.n < you) g.n = you;
         // increment number of edges by 1
         g.e++;
 	}
 
-    // add 1 to g.n since first node is 0
+    // adds 1 to n since node indices start at 0
 	g.n++;
     
     // prints out number of nodes and number of edges
     printf("Number of nodes: %d\nNumber of edges: %d\n", g.n, g.e);
 
-    // allocate memory to n
+    // initialize array of NODE structs in heap
+    // with calloc, we initialize integers to 0
 	n = calloc(g.n, sizeof(NODE));
+    
+    // initialize array of size system (number of nodes)
+    // with calloc we initialize integers to 0
+    // this is used to manage memory allocation of nb, nc, and t
+	alloc = calloc(g.n, sizeof(unsigned int));
 
-    // rewind file
+    // sets the file position to the beginning
 	rewind(fp);
 
-	// scan the degrees
-	while (2 == fscanf(fp, "%u %u\n", &me, &you)) {
-		n[me].deg++;
-		n[you].deg++;
+	// scan the degrees (here we implicitly assume undirected network)
+    // loop over lines in fp
+	while (2 == fscanf(fp, "%u %u %*u\n", &me, &you)) {
+		// find index of 'you' in adjacency list of 'me'
+        // accounting for deg and nb is taken care of in 'get_index()'
+        i = get_index(me, you);
+		// increase number of contacts with node 'you' by 1
+        n[me].nc[i]++;
+        // if network is undirected, we need to do the same but the other way around
+        if (dir == 0) {
+            // find index of 'me' in adjacency list of 'you'
+            // accounting for deg and nb is taken care of in 'get_index()'
+            i = get_index(you, me);
+            // increase number of contacts with node 'me' by 1
+            n[you].nc[i]++;
+        }        
 	}
 
-	// allocate adjacency lists
+    // sets the file position to the beginning
+	rewind(fp);
+
+    // prepare arrays of contact times
+    // loop over int me (over all nodes in network)
+	for (me = 0; me < g.n; me++) {
+        // loop over all contacts 'i' of node 'me'
+		for (i = 0; i < n[me].deg; i++) {
+            // allocate memory for array of contact times
+			n[me].t[i] = malloc(n[me].nc[i] * sizeof(unsigned int));
+            // set number of contacts back to 0
+            // this is needed because we use nc to increment in next code block
+			n[me].nc[i] = 0;
+		}
+	}
+
+	// scan the times
+    // loop over lines in fp (this time considering contact times)
+    // since input edgelist is sorted by date, the last g.dur will be length of period
+	while (3 == fscanf(fp, "%u %u %u\n", &me, &you, &g.dur)) {
+		// find index of 'you' in adjacency list of 'me'
+        i = get_index(me, you);
+        // set contact times
+		n[me].t[i][n[me].nc[i]++] = g.dur;
+        // if network is undirected, we need to do the same but the other way around
+        if (dir == 0) {
+            // find index of 'me' in adjacency list of 'you'
+            i = get_index(you, me);
+            // set contact times
+            n[you].t[i][n[you].nc[i]++] = g.dur;
+        }
+	}
+    
+    // print g.dur to console
+    printf("Duration: %d\n", g.dur);
+
+	// reallocate adjacency lists
+    // this is needed because we might have allocated too much memory in the 'get_index()' part
+    // here, we therefore allocate the correct amount of memory
+    // loop over all nodes in network
 	for (i = 0; i < g.n; i++) {
-        // allocate memory to nb arrays
-		n[i].nb = malloc(n[i].deg * sizeof(unsigned int));
-        // reset deg to 0 as we need it to allocate neighbors
-		n[i].deg = 0;
+		n[i].nb = realloc(n[i].nb, n[i].deg * sizeof(unsigned int));
+		n[i].nc = realloc(n[i].nc, n[i].deg * sizeof(unsigned int));
+		n[i].t = realloc(n[i].t, n[i].deg * sizeof(unsigned int *));
+        // for every node i, sort t in decreasing order of its last element
+		quick(i);
 	}
 
-    // rewind file
-	rewind(fp);
-
-	// fill adjacency lists
-	while (2 == fscanf(fp, "%u %u\n", &me, &you)) {
-		n[me].nb[n[me].deg++] = you;
-		n[you].nb[n[you].deg++] = me;
-	}
+    // free memory
+	free(alloc);
     
 }
 
 
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// find all nodes that could be a source (out-edges)
+
+void find_possible_sources () {
+    
+    // declare unsigned integer
+    unsigned int i;
+    
+    // initialize number of possible sources (nps) to 0
+    g.nps = 0;
+    
+    // allocate memory to g.ps
+    g.ps = calloc(g.n, sizeof(unsigned int));
+    
+    // find all nodes with out-edges
+    for (i = 0; i < g.n; i++) if (n[i].deg > 0) g.ps[g.nps++] = i;
+    
+    // reallocate memory
+    g.ps = realloc(g.ps, g.nps * sizeof(unsigned int));
+    
+    // print number of nodes with out-edges to console
+    printf("Number of nodes with out-edges: %d\n", g.nps);
+    
+}
+
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// initialize the prior on possible values of T
+// type = 0 (geometric), type = 1 (delta)
+
+void init_prior (PRIOR *pr, unsigned int type) {
+    
+    // declare unsigned integer
+    unsigned int i;
+    
+    // get probability corresponding to avg. T
+    double prob = 1.0 / (1.0 + g.T);
+    
+    // assert that input 'type' is one of the possible values
+    assert(type == 0 || type == 1);
+    
+    // determine number of possible values for T
+    pr->n_durs = NUMT * g.T + 1;
+    
+    // allocate memory
+    pr->priors = calloc(pr->n_durs, sizeof(double));
+    
+    // depending on type, set values of prior
+    if (type == 0) {
+        
+        // truncated (geometric) prior probabilities
+        // CDF is 1.0 - (1.0 - p)^(cutoff + 1), hence we can plug-in pr->n_durs (no need to subtract 1)
+        for (i = 0; i < pr->n_durs; i++) pr->priors[i] = (prob * pow(1.0 - prob, i)) / (1.0 - pow(1.0 - prob, pr->n_durs));
+        
+    } else if (type == 1) {
+        
+        // Delta prior (only 1.0 for true T)
+        for (i = 0; i < pr->n_durs; i++) if (i == g.T) pr->priors[i] = 1.0;
+        
+    }
+    
+}
+
+
+    
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // set up output structs for querying
 
-void set_up (OUTPUTQ *out) {
+void set_up (OUTQ *out) {
     
-    // declare integers
-    unsigned int i, j;
+    // declare integer
+    unsigned int i;
     
-    // allocate memory to arrays in out (first level)
-    out->qmap = malloc(NEXP * sizeof(unsigned int **));
-    out->ranks = malloc(NEXP * sizeof(unsigned int **));
-    out->nsources = malloc(NEXP * sizeof(unsigned int **));
+    // allocate memory to arrays in out
+    out->ranks = malloc(NEXP * sizeof(unsigned int *));
+    out->nsources = malloc(NEXP * sizeof(unsigned int *));
+    out->css = malloc(NEXP * sizeof(unsigned int *));
     
     // loop over number of experiments
     for (i = 0; i < NEXP; i++) {
         
-        // allocate memory to arrays on second level
-        out->qmap[i] = malloc(g.ntinf * sizeof(unsigned int *));
-        out->ranks[i] = malloc(g.ntinf * sizeof(unsigned int *));
-        out->nsources[i] = malloc(g.ntinf * sizeof(unsigned int *));
-        
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // allocate memory to array on third level
-            out->qmap[i][j] = malloc(NQUERIES * sizeof(unsigned int));
-            out->ranks[i][j] = malloc(NQUERIES * sizeof(unsigned int));
-            out->nsources[i][j] = malloc(NQUERIES * sizeof(unsigned int));
-            
-        }
+        // allocate memory to arrays on inner level
+        out->ranks[i] = malloc(NQUERIES * sizeof(unsigned int));
+        out->nsources[i] = malloc(NQUERIES * sizeof(unsigned int));
+        out->css[i] = malloc(NQUERIES * sizeof(unsigned int));
         
     }
     
@@ -123,33 +303,23 @@ void set_up (OUTPUTQ *out) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // clean up output structs for querying
 
-void clean_up (OUTPUTQ *out) {
+void clean_up (OUTQ *out) {
     
-    // declare integers
-    unsigned int i, j;
+    // declare integer
+    unsigned int i;
     
     // loop over number of experiments
     for (i = 0; i < NEXP; i++) {
         
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // free arrays on third level
-            free(out->qmap[i][j]);
-            free(out->ranks[i][j]);
-            free(out->nsources[i][j]);
-            
-        }
-            
-        // free arrays on second level
-        free(out->qmap[i]);
+        // free arrays on inner level
         free(out->ranks[i]);
         free(out->nsources[i]);
+        free(out->css[i]);
         
     }
     
-    // free arrays on first level
-    free(out->qmap); free(out->ranks); free(out->nsources);
+    // free arrays on outer level
+    free(out->ranks); free(out->nsources); free(out->css);
     
 }
 
@@ -158,7 +328,7 @@ void clean_up (OUTPUTQ *out) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // drawing the first observed infected node
 
-void draw_first_node (unsigned int tinf_idx) {
+void draw_first_node () {
     
     // declare integers
     unsigned int i, active = 0;
@@ -166,17 +336,9 @@ void draw_first_node (unsigned int tinf_idx) {
     // create array for active nodes
     unsigned int active_nodes[g.n];
     
-    // loop over all nodes in graph
-    for (i = 0; i < g.n; i++) {
-        // check if node is activated
-        if (n[i].ground_truth[tinf_idx] > 0) {
-            // add node i to active_nodes
-            active_nodes[active] = i;
-            // increment number of active nodes by 1
-            active++;
-        }
-    }
-    
+    // loop over all nodes in graph and add them to array if they have been activated
+    for (i = 0; i < g.n; i++) if (n[i].true_state == 1 || n[i].true_state == 2) active_nodes[active++] = i;
+
     // random draw of integer in active nodes
     i = pcg_32_bounded(active);
     
@@ -184,7 +346,7 @@ void draw_first_node (unsigned int tinf_idx) {
     g.fin = active_nodes[i];
     
     // print to console
-    // printf("First observed node is %u\n", g.fin);
+    printf("First observed node is %u\n", g.fin);
     
 }
 
@@ -278,96 +440,76 @@ unsigned int find_max (double array[]) {
 }
 
 
-
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// sort log-likelihoods and find rank of true source
+// compute measure to evaluate performance (FULL INFERENCE)
 
-void sort_rank (POSTERIOR *post) {
+void eval_full (unsigned int nexp, INF *inf, OUTF *outf) {
     
     // declare integers
-    unsigned int i, j, temp1, rank, nn, ns;
+    unsigned int i, j, temp1;
     
     // declare doubles
-    double min, temp2, rank_final = -1.0;
+    double temp2;
     
     // initialize arrays on the stack
-    unsigned int source_indices[g.n]; // this is needed for the sorting
-    double log_liks[g.n]; // this is needed for the sorting
-    double ranks[g.n]; // ranks can be decimal numbers
+    unsigned int source_indices[inf->n_sources]; // this is needed for the sorting
+    double post[inf->n_sources]; // this is needed for the sorting
+    double ranks[inf->n_sources]; // ranks can be decimal numbers
     
-    // *******************************************************************
-    // Find min. log-likelihood, then set all invalid sources to min - 1.0
+    // --------------------------------------------------
+    // SORT MARGINAL SOURCE POSTERIOR IN DESCENDING ORDER
     
-    // initialize min to first element in log_liks
-    min = post->log_liks[0];
-    
-    // initialize ns to number of sources
-    ns = g.n;
-    
-    // loop over all sources
-    for (i = 0; i < g.n; i++) {
+    // loop over sources to initialize sorting
+    for (i = 0; i < inf->n_sources; i++) {
         
-        // find min. element in log_liks
-        if (post->log_liks[i] < min) min = post->log_liks[i];
-        
-        // reduce ns by 1 if source is invalid
-        if (post->log_liks[i] == INVALID) ns--;
-     
-    }
-    
-    // ****************************************
-    // Sort log-likelihoods in descending order
-
-    // loop over all sources
-    for (i = 0; i < g.n; i++) {
         // fill source_indices with i
         source_indices[i] = i;
-        // fill log_liks
-        log_liks[i] = (post->log_liks[i] == INVALID) ? (min - 1.0) : post->log_liks[i];
+        
+        // fill post with posterior probabilities
+        post[i] = inf->marginal_sources[i];
+        
     }
  
     // loop over array elements
-    for (i = 0; i < g.n; i++) {
+    for (i = 0; i < inf->n_sources; i++) {
         
         // loop over all array elements after i-th element
-        for (j = i + 1; j < g.n; j++) {
+        for (j = i + 1; j < inf->n_sources; j++) {
             
             // swap elements if i-th element is smaller than j-th element
-            if (log_liks[i] < log_liks[j]) {
+            if (post[i] < post[j]) {
                 
-                // store source and lik at i in temp
+                // store source and posterior at i in temp
                 temp1 = source_indices[i];
-                temp2 = log_liks[i];
+                temp2 = post[i];
                 
                 // set i to j
                 source_indices[i] = source_indices[j];
-                log_liks[i] = log_liks[j];
+                post[i] = post[j];
                 
                 // set j from temp
                 source_indices[j] = temp1;
-                log_liks[j] = temp2;
+                post[j] = temp2;
+                
             }
         }
     }
     
-    // store max. log-likelihood in GLOBALS
-    g.maxlog = log_liks[0];
+    // -------------------------------------------
+    // LOOP OVER SORTED POSTERIOR TO COMPUTE RANKS
     
-    // store qmap
-    g.qmap = source_indices[0];
+    // initialize rank to 1
+    unsigned int rank = 1, nn;
     
-    // ******************************************
-    // Compute ranks and find rank of true source
-    
-    // initialize values
-    i = 0; rank = 1;
+    // set i back to 0
+    i = 0;
     
     // loop over array
-    while (i < g.n) {
+    while (i < inf->n_sources) {
         // set j to current value of i
         j = i;
         // count how many elements with same log-liks
-        while (j < g.n - 1 && log_liks[j] == log_liks[j + 1]) j++;
+        while (j < inf->n_sources - 1 && post[j] == post[j + 1]) j++;
         // set nn
         nn = j - i + 1;
         // set ranks
@@ -376,42 +518,180 @@ void sort_rank (POSTERIOR *post) {
         rank += nn;
         i += nn;
     }
+
+    // -------------------------------------------
+    // LOOP OVER SORTED POSTERIOR
     
-    // find rank of true source
-    for (i = 0; i < g.n; i++) if (source_indices[i] == g.true_source) rank_final = ranks[i];
+    // initialize credible set size (css) and number of active sources (non-zero posterior) to 0
+    unsigned int css = 0, nact = 0;
     
-    // store results in GLOBALS
-    g.rank = rank_final;
-    g.nsources = ns;
+    // initialize cumulated posterior to 0.0
+    double cumpost = 0.0;
+    
+    // loop over sorted posterior
+    for (i = 0; i < inf->n_sources; i++) {
+        
+        // increment nact by 1 as long as posterior is non-zero
+        if (post[i] > 0.0) nact++;
+        
+        // check if cumpost is smaller than 0.95
+        if (cumpost < 0.95) {
+            
+            // add current posterior prob. to cumulated posterior
+            cumpost += post[i];
+            
+            // increment credible set size by 1
+            css++;
+            
+        }
+        
+        // check if source at current index is true source
+        if (inf->sources[source_indices[i]] == g.true_source) {
+            
+            // add rank of true source to outf
+            outf->ranks[nexp] = ranks[i];
+            
+            // add posterior of true source to outf
+            outf->posteriors[nexp] = post[i];
+            
+        }
+
+    }
+    
+    // add number of active sources and credible set size to outf
+    outf->nsources[nexp] = nact; outf->css[nexp] = css;
+    
+    // print info to console
+    printf("Rank of true source: %d (Credible set size: %d)\n", (int) outf->ranks[nexp], css);
     
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// randomly select node from all activated nodes
 
-unsigned int random_draw (unsigned int inf_time_idx) {
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// compute measure to evaluate performance (QUERYING)
+
+void eval_query (unsigned int nexp, unsigned int nquery, INF *inf, OUTQ *o) {
     
     // declare integers
-    unsigned int rn, i, j = 0;
+    unsigned int i, j, temp1;
     
-    // create array
-    unsigned int possible_nodes[g.n];
+    // declare doubles
+    double temp2;
     
-    // add all activated nodes to array
-    for (i = 0; i < g.n; i++) if (n[i].ground_truth[inf_time_idx] > 0) possible_nodes[j++] = i;
+    // initialize arrays on the stack
+    unsigned int source_indices[inf->n_sources]; // this is needed for the sorting
+    double post[inf->n_sources]; // this is needed for the sorting
+    double ranks[inf->n_sources]; // ranks can be decimal numbers
+    
+    // --------------------------------------------------
+    // SORT MARGINAL SOURCE POSTERIOR IN DESCENDING ORDER
+    
+    // loop over sources to initialize sorting
+    for (i = 0; i < inf->n_sources; i++) {
         
-    // randomly pick one
-    rn = possible_nodes[pcg_32_bounded(j)];
+        // fill source_indices with i
+        source_indices[i] = i;
         
-    // return node
-    return rn;
+        // fill post with posterior probabilities
+        post[i] = inf->marginal_sources[i];
+        
+    }
+ 
+    // loop over array elements
+    for (i = 0; i < inf->n_sources; i++) {
+        
+        // loop over all array elements after i-th element
+        for (j = i + 1; j < inf->n_sources; j++) {
+            
+            // swap elements if i-th element is smaller than j-th element
+            if (post[i] < post[j]) {
+                
+                // store source and posterior at i in temp
+                temp1 = source_indices[i];
+                temp2 = post[i];
+                
+                // set i to j
+                source_indices[i] = source_indices[j];
+                post[i] = post[j];
+                
+                // set j from temp
+                source_indices[j] = temp1;
+                post[j] = temp2;
+                
+            }
+        }
+    }
+    
+    // -------------------------------------------
+    // LOOP OVER SORTED POSTERIOR TO COMPUTE RANKS
+    
+    // initialize rank to 1
+    unsigned int rank = 1, nn;
+    
+    // set i back to 0
+    i = 0;
+    
+    // loop over array
+    while (i < inf->n_sources) {
+        // set j to current value of i
+        j = i;
+        // count how many elements with same log-liks
+        while (j < inf->n_sources - 1 && post[j] == post[j + 1]) j++;
+        // set nn
+        nn = j - i + 1;
+        // set ranks
+        for (j = 0; j < nn; j++) ranks[j + i] = rank + (nn - 1) * 0.5;
+        // increment rank and i
+        rank += nn;
+        i += nn;
+    }
+
+    // -------------------------------------------
+    // LOOP OVER SORTED POSTERIOR
+    
+    // initialize credible set size (css) and number of active sources (non-zero posterior) to 0
+    unsigned int css = 0, nact = 0;
+    
+    // initialize cumulated posterior to 0.0
+    double cumpost = 0.0;
+    
+    // loop over sorted posterior
+    for (i = 0; i < inf->n_sources; i++) {
+        
+        // increment nact by 1 as long as posterior is non-zero
+        if (post[i] > 0.0) nact++;
+        
+        // check if cumpost is smaller than 0.95
+        if (cumpost < 0.95) {
+            
+            // add current posterior prob. to cumulated posterior
+            cumpost += post[i];
+            
+            // increment credible set size by 1
+            css++;
+            
+        }
+        
+        // check if source at current index is true source; if yes, add rank to o
+        if (inf->sources[source_indices[i]] == g.true_source) o->ranks[nexp][nquery] = ranks[i];
+
+    }
+    
+    // add number of active sources and credible set size to o
+    o->nsources[nexp][nquery] = nact; o->css[nexp][nquery] = css;
+    
+    // print info to console
+    printf("Rank of true source: %d (Credible set size: %d)\n", (int) o->ranks[nexp][nquery], css);
     
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-// write results to file
 
-void export_output (OUTPUT *out) {
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// write posterior to file
+
+void export_posterior (unsigned int nexp, unsigned int nq, INF *inf, PRIOR *pr) {
     
     // declare unsigned integers
     unsigned int i, j;
@@ -419,8 +699,74 @@ void export_output (OUTPUT *out) {
     // declare pointer to FILE
 	FILE *fp;
     
+    // initialize string for filename
+    char fname[30];
+    
+    // cat string and integer
+    snprintf(fname, 30, "POSTERIOR_EXP_%u_Q_%u.txt", nexp, nq);
+    
     // open file
-	fp = fopen("output/output_FULL_true_sources.txt", "w");
+	fp = fopen(fname, "w");
+    if (!fp) {
+        // print error if we cannot open file
+		fprintf(stderr, "can't open file\n");
+		return;
+	}
+    
+    // add empty because first column will contain sources
+    fprintf(fp, ";");
+    
+    // print T's in top row
+    for (j = 0; j < pr->n_durs; j++) fprintf(fp, "%u;", j);
+    
+    // add line break after top row
+    fprintf(fp, "\n");
+    
+    // loop over sources
+    for (i = 0; i < inf->n_sources; i++) {
+        
+        // add source as first value in row
+        fprintf(fp, "%u;", inf->sources[i]);
+        
+        // loop over possible T's
+        for (j = 0; j < pr->n_durs; j++) {
+            
+            // add posterior probability
+            fprintf(fp, "%f;", inf->log_liks[i][j]);
+            
+        }
+        
+        // add line break at the end
+        fprintf(fp, "\n");
+        
+    }
+
+    // close file
+	fclose(fp);
+    
+}
+
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// write results to file
+
+void export_output (OUTF *outf) {
+    
+    // declare unsigned integers
+    unsigned int i;
+    
+    // declare pointer to FILE
+	FILE *fp;
+    
+    // initialize string for filename
+    char fname1[15];
+    
+    // cat string and integer
+    snprintf(fname1, 15, "FULL_%u.txt", g.T);
+    
+    // open file
+	fp = fopen(fname1, "w");
     if (!fp) {
         // print error if we cannot open file
 		fprintf(stderr, "can't open file\n");
@@ -428,157 +774,7 @@ void export_output (OUTPUT *out) {
 	}
     
     // loop over experiments and write results to file
-    for (i = 0; i < NEXP; i++) fprintf(fp, "%u\n", out->truesource[i]);
-
-    // close file
-	fclose(fp);
-    
-    // --------------------------------------------------
-    
-    // open file
-	fp = fopen("output/output_FULL_qmap.txt", "w");
-    if (!fp) {
-        // print error if we cannot open file
-		fprintf(stderr, "can't open file\n");
-		return;
-	}
-    
-    // loop over experiments
-    for (i = 0; i < NEXP; i++) {
-        
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // write results to file
-            fprintf(fp, "%u", out->qmap[i][j]);
-            
-            // either ";" or newline after a value
-            if (j == (g.ntinf - 1)) fprintf(fp, "\n");
-            else fprintf(fp, ";");
-            
-        }
-        
-    }
-
-    // close file
-	fclose(fp);
-    
-    // --------------------------------------------------
-    
-    // open file
-	fp = fopen("output/output_FULL_qrand.txt", "w");
-    if (!fp) {
-        // print error if we cannot open file
-		fprintf(stderr, "can't open file\n");
-		return;
-	}
-    
-    // loop over experiments
-    for (i = 0; i < NEXP; i++) {
-        
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // write results to file
-            fprintf(fp, "%u", out->qrand[i][j]);
-            
-            // either ";" or newline after a value
-            if (j == (g.ntinf - 1)) fprintf(fp, "\n");
-            else fprintf(fp, ";");
-            
-        }
-        
-    }
-
-    // close file
-	fclose(fp);
-    
-    // --------------------------------------------------
-    
-    // open file
-	fp = fopen("output/output_FULL_ranks.txt", "w");
-    if (!fp) {
-        // print error if we cannot open file
-		fprintf(stderr, "can't open file\n");
-		return;
-	}
-    
-    // loop over experiments
-    for (i = 0; i < NEXP; i++) {
-        
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // write results to file
-            fprintf(fp, "%u", out->ranks[i][j]);
-            
-            // either ";" or newline after a value
-            if (j == (g.ntinf - 1)) fprintf(fp, "\n");
-            else fprintf(fp, ";");
-            
-        }
-        
-    }
-
-    // close file
-	fclose(fp);
-    
-    // --------------------------------------------------
-    
-    // open file
-	fp = fopen("output/output_FULL_nsources.txt", "w");
-    if (!fp) {
-        // print error if we cannot open file
-		fprintf(stderr, "can't open file\n");
-		return;
-	}
-    
-    // loop over experiments
-    for (i = 0; i < NEXP; i++) {
-        
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // write results to file
-            fprintf(fp, "%u", out->nsources[i][j]);
-            
-            // either ";" or newline after a value
-            if (j == (g.ntinf - 1)) fprintf(fp, "\n");
-            else fprintf(fp, ";");
-            
-        }
-        
-    }
-
-    // close file
-	fclose(fp);
-    
-    // --------------------------------------------------
-    
-    // open file
-	fp = fopen("output/output_FULL_nactive.txt", "w");
-    if (!fp) {
-        // print error if we cannot open file
-		fprintf(stderr, "can't open file\n");
-		return;
-	}
-    
-    // loop over experiments
-    for (i = 0; i < NEXP; i++) {
-        
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // write results to file
-            fprintf(fp, "%u", out->nactive[i][j]);
-            
-            // either ";" or newline after a value
-            if (j == (g.ntinf - 1)) fprintf(fp, "\n");
-            else fprintf(fp, ";");
-            
-        }
-        
-    }
+    for (i = 0; i < NEXP; i++) fprintf(fp, "%u;%u;%u;%u;%f;%u;%f\n", outf->nactives[i], outf->nsources[i], outf->true_sources[i], outf->ranks[i], outf->posteriors[i], outf->css[i], outf->sim_time[i]);
 
     // close file
 	fclose(fp);
@@ -590,19 +786,19 @@ void export_output (OUTPUT *out) {
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 // write results from QUERYING to file
 
-void export_output_querying (OUTPUTQ *out, char s[]) {
+void export_output_querying (OUTQ *o, char s[]) {
     
     // declare unsigned integers
-    unsigned int i, j, k;
+    unsigned int i, j;
     
     // declare pointer to FILE
 	FILE *fp;
     
     // initialize string for filename
-    char fname1[30];
+    char fname1[20];
     
     // cat string and integer
-    snprintf(fname1, 30, "output/ranks_%s.txt", s);
+    snprintf(fname1, 20, "%s_ranks.txt", s);
     
     // open file
 	fp = fopen(fname1, "w");
@@ -615,16 +811,11 @@ void export_output_querying (OUTPUTQ *out, char s[]) {
     // loop over experiments
     for (i = 0; i < NEXP; i++) {
         
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // write results to file (for different queries
-            for (k = 0; k < NQUERIES; k++) fprintf(fp, "%u;", out->ranks[i][j][k]);
-            
-            // newline after last inference time
-            if (j == (g.ntinf - 1)) fprintf(fp, "\n");
-            
-        }
+        // loop over queries and write ranks to file
+        for (j = 0; j < NQUERIES; j++) fprintf(fp, "%u;", o->ranks[i][j]);
+        
+        // print new line before printing results of next experiment
+        fprintf(fp, "\n");
         
     }
 
@@ -634,10 +825,10 @@ void export_output_querying (OUTPUTQ *out, char s[]) {
     // --------------------------------------------------
     
     // initialize string for filename
-    char fname2[30];
+    char fname2[20];
     
     // cat string and integer
-    snprintf(fname2, 30, "output/nsources_%s.txt", s);
+    snprintf(fname2, 20, "%s_nsources.txt", s);
     
     // open file
 	fp = fopen(fname2, "w");
@@ -650,16 +841,11 @@ void export_output_querying (OUTPUTQ *out, char s[]) {
     // loop over experiments
     for (i = 0; i < NEXP; i++) {
         
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // write results to file (for different queries
-            for (k = 0; k < NQUERIES; k++) fprintf(fp, "%u;", out->nsources[i][j][k]);
-            
-            // newline after last inference time
-            if (j == (g.ntinf - 1)) fprintf(fp, "\n");
-            
-        }
+        // loop over queries and write ranks to file
+        for (j = 0; j < NQUERIES; j++) fprintf(fp, "%u;", o->nsources[i][j]);
+        
+        // print new line before printing results of next experiment
+        fprintf(fp, "\n");
         
     }
 
@@ -669,10 +855,10 @@ void export_output_querying (OUTPUTQ *out, char s[]) {
     // --------------------------------------------------
     
     // initialize string for filename
-    char fname3[30];
+    char fname3[20];
     
     // cat string and integer
-    snprintf(fname3, 30, "output/qmap_%s.txt", s);
+    snprintf(fname3, 20, "%s_css.txt", s);
     
     // open file
 	fp = fopen(fname3, "w");
@@ -685,21 +871,52 @@ void export_output_querying (OUTPUTQ *out, char s[]) {
     // loop over experiments
     for (i = 0; i < NEXP; i++) {
         
-        // loop over inference times
-        for (j = 0; j < g.ntinf; j++) {
-            
-            // write results to file (for different queries
-            for (k = 0; k < NQUERIES; k++) fprintf(fp, "%u;", out->qmap[i][j][k]);
-            
-            // newline after last inference time
-            if (j == (g.ntinf - 1)) fprintf(fp, "\n");
-            
-        }
+        // loop over queries and write ranks to file
+        for (j = 0; j < NQUERIES; j++) fprintf(fp, "%u;", o->css[i][j]);
+        
+        // print new line before printing results of next experiment
+        fprintf(fp, "\n");
         
     }
 
     // close file
 	fclose(fp);
+    
+}
+
+
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// write run times of querying strategies to file
+
+void export_run_times(OUTT *ot_maxp, OUTT *ot_ucty, OUTT *ot_akld, OUTT *ot_onehop, OUTT *ot_randq) {
+    
+    // declare unsigned integers
+    unsigned int i;
+    
+    // declare pointer to FILE
+	FILE *fp;
+    
+    // initialize string for filename
+    char fname[18];
+    
+    // cat string and integer
+    snprintf(fname, 18, "RUN_TIMES_%u.txt", g.T);
+    
+    // open file
+	fp = fopen(fname, "w");
+    if (!fp) {
+        // print error if we cannot open file
+		fprintf(stderr, "can't open file\n");
+		return;
+	}
+    
+    // loop over experiments and write results to file
+    for (i = 0; i < NEXP; i++) fprintf(fp, "%f;%f;%f;%f;%f\n", ot_maxp->run_time[i], ot_ucty->run_time[i], ot_akld->run_time[i], ot_onehop->run_time[i], ot_randq->run_time[i]);
+
+    // close file
+	fclose(fp);
+    
     
 }
 
