@@ -1,6 +1,6 @@
 # Active Querying Approach to Epidemic Source Detection on Contact Networks
 
-Our implementation is heavily **based** on fast C code for temporal networks originally written by Petter Holme (thanks!). His code can be found here: https://github.com/pholme/tsir.
+Our implementation is **heavily** based on fast C code for temporal networks originally written by Petter Holme (thanks!). His code can be found here: https://github.com/pholme/tsir.
 
 Our code can be compiled and run as follows:
 1. Create a directory *o* for the object files.
